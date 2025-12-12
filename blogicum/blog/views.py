@@ -24,6 +24,21 @@ from blog.constants import POSTS_PER_PAGE
 User = get_user_model()
 
 
+def get_published_posts():
+    """
+    Возвращает QuerySet опубликованных постов с аннотацией количества комментариев.
+    """
+    return (
+        Post.objects.filter(
+            is_published=True,
+            category__is_published=True,
+            pub_date__lte=timezone.now(),
+        )
+        .annotate(comment_count=Count("comments"))
+        .order_by(*Post._meta.ordering)
+    )
+
+
 class PostListView(ListView):
     model = Post
     template_name = "blog/index.html"
@@ -31,16 +46,7 @@ class PostListView(ListView):
     paginate_by = POSTS_PER_PAGE
 
     def get_queryset(self):
-        queryset = (
-            Post.objects.filter(
-                is_published=True,
-                category__is_published=True,
-                pub_date__lte=timezone.now(),
-            )
-            .annotate(comment_count=Count("comments"))
-            .order_by("-pub_date")
-        )
-        return queryset
+        return get_published_posts()
 
 
 class PostCreateView(LoginRequiredMixin, CreateView):
@@ -77,7 +83,7 @@ class PostDeleteView(PostDispatchMixin, LoginRequiredMixin, DeleteView):
     success_url = reverse_lazy("blog:index")
 
 
-class PostDetailView(LoginRequiredMixin, DetailView):
+class PostDetailView(DetailView):
     model = Post
     pk_url_kwarg = "post_id"
     template_name = "blog/detail.html"
@@ -104,9 +110,22 @@ class PostDetailView(LoginRequiredMixin, DetailView):
 
 def user_profile(request, username):
     profile = get_object_or_404(User, username=username)
-    posts = profile.posts.annotate(comment_count=Count("comments")).order_by(
-        "-pub_date"
+    
+    # Базовый фильтр - опубликованные посты
+    posts = profile.posts.filter(
+        is_published=True,
+        category__is_published=True,
+        pub_date__lte=timezone.now(),
     )
+    
+    # Если это сам автор, показываем также непубликованные и отложенные посты
+    if request.user == profile:
+        posts = profile.posts
+    
+    posts = posts.annotate(
+        comment_count=Count("comments")
+    ).order_by(*Post._meta.ordering)
+    
     paginator = Paginator(posts, POSTS_PER_PAGE)
     page_obj = paginator.get_page(request.GET.get("page"))
     context = {
@@ -191,11 +210,15 @@ def category_posts(request, category_slug):
     category = get_object_or_404(Category, slug=category_slug)
     if not category.is_published:
         raise Http404
-    post_list = Post.objects.filter(
-        category=category,
-        is_published=True,
-        pub_date__lte=timezone.now(),
-    ).order_by("-pub_date")
+    post_list = (
+        Post.objects.filter(
+            category=category,
+            is_published=True,
+            pub_date__lte=timezone.now(),
+        )
+        .annotate(comment_count=Count("comments"))
+        .order_by(*Post._meta.ordering)
+    )
     paginator = Paginator(post_list, POSTS_PER_PAGE)
     page_obj = paginator.get_page(request.GET.get("page"))
     context = {
